@@ -1,0 +1,285 @@
+--- a/index.js
++++ b/index.js
+@@ -35,19 +35,78 @@
+     showLikes: true,   // badge 显示点赞
+     likeScope: "all",  // all | high
+     likeMin: 0,        // 仅展示 likesSum > likeMin
++
++    // 角标背景高亮
++    badgeHighlightEnabled: false,   // 开启后为角标添加与弹幕同色的背景
++    badgeHighlightAdaptive: false,  // 开启后按“热度”增亮；否则亮度固定 0.5
++    badgeHighlightCurve: {
++        baselineOpacity: 0.1,       // n=0 时的透明度
++        hotnessAtOpacity90: 1000,   // n 达到该值时透明度=0.9
++        sendMultiplier: 1,          // 发送侧倍率：n += (count-1) * sendMultiplier
++        likeMultiplier: 1,          // 点赞侧倍率：仅当点赞角标显示时 n += likesSum * likeMultiplier
++    },
++
+     panelOpen: true,
+ };
+ 
+ function loadConfig() {
+     try {
+         const raw = localStorage.getItem(STORAGE_KEY);
+-        if (!raw) return { ...DEFAULT_CFG };
+-        return { ...DEFAULT_CFG, ...(JSON.parse(raw) || {}) };
++        if (!raw) return { ...DEFAULT_CFG, badgeHighlightCurve: { ...DEFAULT_CFG.badgeHighlightCurve } };
++
++        const parsed = JSON.parse(raw) || {};
++        const cfg = { ...DEFAULT_CFG, ...parsed };
++
++        // ✅ 深合并：避免旧配置缺字段
++        cfg.badgeHighlightCurve = {
++            ...DEFAULT_CFG.badgeHighlightCurve,
++            ...(parsed.badgeHighlightCurve || {}),
++        };
++
++        return cfg;
+     } catch {
+-        return { ...DEFAULT_CFG };
++        return { ...DEFAULT_CFG, badgeHighlightCurve: { ...DEFAULT_CFG.badgeHighlightCurve } };
+     }
+ }
+ const config = loadConfig();
++
++function clampNumber(v, min, max, fallback) {
++    const n = Number(v);
++    if (!Number.isFinite(n)) return fallback;
++    return Math.max(min, Math.min(max, n));
++}
++
++function normalizeBadgeHighlightCurve(curve) {
++    const c = curve || {};
++    return {
++        baselineOpacity: clampNumber(c.baselineOpacity, 0.01, 0.89, DEFAULT_CFG.badgeHighlightCurve.baselineOpacity),
++        hotnessAtOpacity90: clampNumber(c.hotnessAtOpacity90, 1, 1e9, DEFAULT_CFG.badgeHighlightCurve.hotnessAtOpacity90),
++        sendMultiplier: clampNumber(c.sendMultiplier, 0, 1e6, DEFAULT_CFG.badgeHighlightCurve.sendMultiplier),
++        likeMultiplier: clampNumber(c.likeMultiplier, 0, 1e6, DEFAULT_CFG.badgeHighlightCurve.likeMultiplier),
++    };
++}
++
++function computeBadgeHighlightK(curve) {
++    const b0 = curve.baselineOpacity;
++    const n90 = curve.hotnessAtOpacity90;
++
++    // 0.9 = 1 - (1-b0) * e^(-k*n90)
++    const denom = 1 - b0;
++    const ratio = 0.1 / denom;
++    const k = -Math.log(ratio) / n90;
++    return Number.isFinite(k) && k > 0 ? k : 0.0001;
++}
++
++let badgeHighlightCurve = normalizeBadgeHighlightCurve(config.badgeHighlightCurve);
++config.badgeHighlightCurve = badgeHighlightCurve;
++let badgeHighlightK = computeBadgeHighlightK(badgeHighlightCurve);
++
++function opacityFromHotness(n) {
++    const b0 = badgeHighlightCurve.baselineOpacity;
++    const v = 1 - (1 - b0) * Math.exp(-badgeHighlightK * n);
++    return Math.max(0, Math.min(1, v));
++}
++
+ function saveConfig() {
+     try {
+         localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
+@@ -198,6 +257,56 @@
+     const v = parseInt(m[1], 16);
+     return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
+ }
++
++function normalizeHexColorStr(s) {
++    const str = String(s || "").trim().toLowerCase();
++    if (!str) return null;
++    if (str.startsWith("#")) {
++        if (str.length === 4) return `#${str[1]}${str[1]}${str[2]}${str[2]}${str[3]}${str[3]}`;
++        if (str.length === 7) return str;
++    }
++    return null;
++}
++
++function parseCssColorToRgb(s) {
++    const str = String(s || "").trim();
++    if (!str) return null;
++
++    const hex = normalizeHexColorStr(str);
++    if (hex) return parseHexToRgb(hex);
++
++    const m = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([\d.]+))?\s*\)$/i.exec(str);
++    if (!m) return null;
++
++    const r = clampNumber(m[1], 0, 255, 0);
++    const g = clampNumber(m[2], 0, 255, 0);
++    const b = clampNumber(m[3], 0, 255, 0);
++    return [r, g, b];
++}
++
++function getDanmakuRgb(el) {
++    if (!(el instanceof HTMLElement)) return null;
++
++    try {
++        const cs = getComputedStyle(el);
++
++        // 优先用 --color（B站弹幕常用变量；合并时我们也会覆盖）
++        const varColor = cs.getPropertyValue("--color");
++        const rgb1 = parseCssColorToRgb(varColor);
++        if (rgb1) return rgb1;
++
++        // 兜底：用 computed color
++        const rgb2 = parseCssColorToRgb(cs.color);
++        if (rgb2) return rgb2;
++    } catch { }
++
++    // 最后兜底：dataset.color（注意：合并混色时 dataset 可能不是最终色）
++    const rgb3 = parseHexToRgb(el?.dataset?.color);
++    if (rgb3) return rgb3;
++
++    return null;
++}
++
+ function rgbToHex(r, g, b) {
+     const to2 = (x) => Math.max(0, Math.min(255, x | 0)).toString(16).padStart(2, "0");
+     return `#${to2(r)}${to2(g)}${to2(b)}`;
+@@ -520,10 +629,14 @@
+         const threshold = castToInteger(config.likeMin);
+ 
+         let likePart = "";
++        let likeShown = false;
+         if (shouldShowLikes(el)) {
+             const likeText = pending > 0 ? (likesSum > 0 ? `${formatCount(likesSum)}+` : "…") : `${formatCount(likesSum)}`;
+             const pass = pending > 0 ? (threshold <= 0 || likesSum > threshold) : (likesSum > threshold);
+-            if (pass) likePart = `${LIKE_SVG}<span>${likeText}</span>`;
++            if (pass) {
++                likeShown = true;
++                likePart = `${LIKE_SVG}<span>${likeText}</span>`;
++            }
+         }
+ 
+         const sendPart = (config.mergeSame && count > 1) ? `${SEND_SVG}<span>${count}</span>` : "";
+@@ -533,6 +646,28 @@
+         } else {
+             const badge = ensureBadge(el);
+             badge.innerHTML = `${sendPart}${likePart}`;
++
++            // 角标背景高亮：背景颜色与弹幕颜色一致，透明度可调
++            if (config.badgeHighlightEnabled) {
++                badge.classList.add("tm-danmaku-badge-hl");
++
++                const alpha = config.badgeHighlightAdaptive
++                    ? (() => {
++                        // 热度 n = (count-1)*sendMultiplier + likesSum*likeMultiplier（仅当点赞角标显示时计入）
++                        const sendCount = (config.mergeSame && count > 1) ? (count - 1) : 0; // ✅ A：重复次数
++                        const sendHot = sendCount * badgeHighlightCurve.sendMultiplier;
++                        const likeHot = likeShown ? (likesSum * badgeHighlightCurve.likeMultiplier) : 0;
++                        const hotness = sendHot + likeHot;
++                        return opacityFromHotness(hotness);
++                    })()
++                    : 0.5;
++
++                const rgb = getDanmakuRgb(el);
++                badge.style.backgroundColor = rgb ? `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${alpha})` : "";
++            } else {
++                badge.classList.remove("tm-danmaku-badge-hl");
++                badge.style.backgroundColor = "";
++            }
+         }
+     });
+ }
+@@ -869,6 +1004,31 @@
+ 
+     // 辅助：按 gid 取 group
+     groupOf(gid) { return groupMap.get(gid); },
++
++    // 调试：设置角标高亮曲线参数（位置参数）
++    // 用法：__DM_ADAPT__.setBadgeHighlightCurve(baselineOpacity, hotnessAtOpacity90, sendMultiplier, likeMultiplier)
++    setBadgeHighlightCurve(baselineOpacity, hotnessAtOpacity90, sendMultiplier, likeMultiplier) {
++        if ([baselineOpacity, hotnessAtOpacity90, sendMultiplier, likeMultiplier].some((x) => x === undefined)) {
++            console.warn("usage: setBadgeHighlightCurve(baselineOpacity, hotnessAtOpacity90, sendMultiplier, likeMultiplier)");
++            return;
++        }
++
++        const curve = normalizeBadgeHighlightCurve({
++            baselineOpacity,
++            hotnessAtOpacity90,
++            sendMultiplier,
++            likeMultiplier,
++        });
++
++        config.badgeHighlightCurve = curve;
++        badgeHighlightCurve = curve;
++        badgeHighlightK = computeBadgeHighlightK(curve);
++
++        saveConfig();
++        refreshAll("setBadgeHighlightCurve");
++
++        console.log("badgeHighlightCurve updated", curve, "k=", badgeHighlightK);
++    },
+ };
+ 
+ try {
+--- a/ui.js
++++ b/ui.js
+@@ -38,6 +38,9 @@
+     let likeScopeSel = null;
+     let likeMinInput = null;
+ 
++    let badgeHighlightSwitchBtn = null;
++    let badgeHighlightAdaptiveSwitchBtn = null;
++
+     function setSwitchOn(swEl, on) {
+         if (!swEl) return;
+         swEl.classList.toggle("on", !!on);
+@@ -57,6 +60,8 @@
+     function applyCfgToUi() {
+         setSwitchOn(mergeSwitchBtn, config.mergeSame);
+         setSwitchOn(likesSwitchBtn, config.showLikes);
++        setSwitchOn(badgeHighlightSwitchBtn, config.badgeHighlightEnabled);
++        setSwitchOn(badgeHighlightAdaptiveSwitchBtn, config.badgeHighlightAdaptive);
+ 
+         if (mergeWindowInput) mergeWindowInput.value = String(config.mergeWindowSec ?? 0);
+         if (likeScopeSel) likeScopeSel.value = config.likeScope;
+@@ -237,8 +242,31 @@
+             }, 200);
+         });
+ 
++
+         panelControls.appendChild(likesSettingsWrap);
+ 
++        // 高亮角标背景
++        const badgeHlUI = makeToggleRow("高亮角标背景", () => config.badgeHighlightEnabled, (v) => {
++            config.badgeHighlightEnabled = v;
++            saveConfig();
++            applyCfgToUi();
++            refreshAll("toggle-badge-highlight");
++        });
++
++        // 按热度增亮（点赞+重复）
++        const badgeHlAdaptiveUI = makeToggleRow("按热度增亮", () => config.badgeHighlightAdaptive, (v) => {
++            config.badgeHighlightAdaptive = v;
++            saveConfig();
++            applyCfgToUi();
++            refreshAll("toggle-badge-highlight-adaptive");
++        });
++
++        badgeHighlightSwitchBtn = badgeHlUI.sw;
++        badgeHighlightAdaptiveSwitchBtn = badgeHlAdaptiveUI.sw;
++
++        panelControls.appendChild(badgeHlUI.row);
++        panelControls.appendChild(badgeHlAdaptiveUI.row);
++
+         // 组装面板
+         panelBodyWrap.appendChild(panelControls);
+         uiPanel.appendChild(header);
+--- a/ui.css
++++ b/ui.css
+@@ -20,6 +20,11 @@
+     flex: 0 0 auto;
+ }
+ 
++.tm-danmaku-badge.tm-danmaku-badge-hl {
++    padding: .06em .22em;
++    border-radius: .28em;
++}
++
+ .tm-danmaku-merged-hide {
+     opacity: 0 !important;
+     visibility: hidden !important;
