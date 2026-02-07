@@ -16,7 +16,7 @@ module.exports = [{
             file: "bili-dm-adapt.user.js",
             name: "B站弹幕显示发送次数与点赞数",
             namespace: "https://github.com/ZBpine/bili-danmaku-adapt/",
-            version: "1.1.1",
+            version: "1.1.2",
             description:
                 "在弹幕旁边显示发送次数（合并同文本弹幕）与点赞数。",
             author: "ZBpine",
@@ -58,7 +58,7 @@ module.exports = [{
             file: "bili-reply-adapt.user.js",
             name: "B站评论显示状态",
             namespace: "https://github.com/ZBpine/bili-danmaku-adapt/",
-            version: "1.0.0",
+            version: "1.0.1",
             description:
                 "评论显示状态，以便知道是否被阿瓦隆。",
             author: "ZBpine",

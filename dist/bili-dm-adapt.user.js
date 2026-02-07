@@ -2,7 +2,7 @@
 // @name        B站弹幕显示发送次数与点赞数
 // @namespace   https://github.com/ZBpine/bili-danmaku-adapt/
 // @description 在弹幕旁边显示发送次数（合并同文本弹幕）与点赞数。
-// @version     1.1.1
+// @version     1.1.2
 // @author      ZBpine
 // @icon        https://www.bilibili.com/favicon.ico
 // @match       https://www.bilibili.com/video/*
@@ -682,10 +682,10 @@ function getMergeWindowSec() {
 }
 
 function memberIdOf(oid, dmid) {
-    return `${oid}:${dmid}`;
+    return `${dmid}`;
 }
 function baseKeyOf(oid, mode, text) {
-    return `${oid}|${mode}|${text}`;
+    return `${mode}|${text}`;
 }
 function allocGroupId(baseKey, stime) {
     // stime 是 seconds(float)，用尽量稳定的字符串，避免科学计数法
@@ -712,7 +712,7 @@ function dropGroup(g) {
 }
 function chooseGroupId(oid, mode, text, dmid, stime) {
     // 不合并：每条一个 group
-    if (!config.mergeSame) return `${oid}|${dmid}`;
+    if (!config.mergeSame) return `${dmid}`;
 
     const baseKey = baseKeyOf(oid, mode, text);
     const win = getMergeWindowSec();
@@ -756,10 +756,30 @@ function chooseGroupId(oid, mode, text, dmid, stime) {
  * 4) 点赞请求：按 oid 分桶批量请求 / 回填
  * =========================
  */
+let currentOid = null;
 const likesCache = new Map();     // memberId -> likes
 const likesPending = new Map();   // oid -> Set<dmid>
 let likesFlushTimer = null;
 let likesInflight = false;
+
+function checkOidChange(oid) {
+    if (!oid) return;
+
+    // 第一次运行或 oid 发生变化
+    if (currentOid !== null && currentOid !== oid) {
+        console.log(`oid 改变: ${currentOid} -> ${oid}. 清除缓存`);
+
+        // 1. 清理弹幕组
+        groupMap.clear();
+        baseKeyGroups.clear();
+
+        // 2. 清理点赞缓存
+        likesCache.clear();
+        likesPending.clear();
+    }
+
+    currentOid = oid;
+}
 
 function queueLikes(oid, dmid) {
     if (!oid || !dmid) return;
@@ -819,7 +839,9 @@ async function flushLikes() {
                 const chunk = Array.from(set).slice(0, 50);
                 chunk.forEach((x) => set.delete(x));
 
+                if (oid !== currentOid) continue;
                 const data = await requestThumbupStats(oid, chunk);
+                if (oid !== currentOid) continue;
 
                 // 回填 cache
                 for (const [dmid, info] of Object.entries(data || {})) {
@@ -850,6 +872,13 @@ async function flushLikes() {
         if (likesPending.size) likesFlushTimer = setTimeout(flushLikes, 1200);
     } finally {
         likesInflight = false;
+        if (likesCache.size > 3000) {
+            const keys = Array.from(likesCache.keys());
+            for (let i = 0; i < 1000; i++) {
+                likesCache.delete(keys[i]);
+            }
+            console.log("清理部分弹幕点赞缓存");
+        }
     }
 }
 
@@ -998,6 +1027,7 @@ function onDanmakuStart(el) {
     const stimeRaw = Number(el.dataset.stime);
     const stime = Number.isFinite(stimeRaw) ? stimeRaw : NaN;
     if (!oid || !dmid) return;
+    checkOidChange(oid);
     if (config.mergeSame && mode == null) return;
 
     const mid = memberIdOf(oid, dmid);
@@ -1311,6 +1341,7 @@ const debugAPI = {
     get groupMap() { return groupMap; },
     get elMeta() { return elMeta; },
     get baseKeyGroups() { return baseKeyGroups; },
+    get likesCache() { return likesCache; },
 
     // 辅助：把 WeakMap 里某个元素的 meta 取出来
     metaOf(el) { return elMeta.get(el); },

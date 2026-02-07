@@ -65,18 +65,6 @@ function performInjection(ctx) {
     const state = data.state;
     const attr = data.attr;
 
-    if (settings.showIP) {
-        // 4. 插入显示信息 (兼容性处理)
-        let ipSpan = pubdate.querySelector('.ip-location');
-        if (!ipSpan && ip) {
-            ipSpan = document.createElement('span');
-            ipSpan.className = 'ip-location';
-            ipSpan.style.marginLeft = '15px';
-            ipSpan.textContent = ip;
-            pubdate.appendChild(ipSpan);
-        }
-    }
-
     let text = "";
     if (settings.showState && state > 0) text += `状态：${state} `;
     if (settings.showAttr && attr > 0) text += `属性：${parseAttr(attr)} `;
@@ -89,6 +77,18 @@ function performInjection(ctx) {
             pubdate.appendChild(extra);
         }
         extra.textContent = text;
+    }
+
+    if (settings.showIP) {
+        // 4. 插入显示信息 (兼容性处理)
+        let ipSpan = pubdate.querySelector('.ip-location');
+        if (!ipSpan && ip) {
+            ipSpan = document.createElement('span');
+            ipSpan.className = 'ip-location';
+            ipSpan.style.marginLeft = '15px';
+            ipSpan.textContent = ip;
+            pubdate.appendChild(ipSpan);
+        }
     }
 }
 
