@@ -58,7 +58,7 @@ module.exports = [{
             file: "bili-reply-adapt.user.js",
             name: "B站评论显示状态",
             namespace: "https://github.com/ZBpine/bili-danmaku-adapt/",
-            version: "1.0.1",
+            version: "1.1.0",
             description:
                 "评论显示状态，以便知道是否被阿瓦隆。",
             author: "ZBpine",

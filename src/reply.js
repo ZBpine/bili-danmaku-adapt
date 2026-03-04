@@ -1,20 +1,20 @@
 const settings = {
-    showIP: GM_getValue('showIP', true),
-    showState: GM_getValue('showState', true),
-    showAttr: GM_getValue('showAttr', true)
+    showIP: GM_getValue("showIP", true),
+    showState: GM_getValue("showState", true),
+    showAttr: GM_getValue("showAttr", true),
 };
 
 function registerMenu(key, label) {
-    GM_registerMenuCommand(`${settings[key] ? '✅' : '❌'} ${label}`, () => {
+    GM_registerMenuCommand(`${settings[key] ? "✅" : "❌"} ${label}`, () => {
         settings[key] = !settings[key];
         GM_setValue(key, settings[key]);
         // location.reload(); // 刷新页面使设置生效
     });
 }
-registerMenu('showIP', '显示 IP 属地');
-registerMenu('showState', '显示 状态');
-registerMenu('showAttr', '显示 属性位');
-GM_registerMenuCommand('菜单不会立即刷新', () => { });
+registerMenu("showIP", "显示 IP 属地");
+registerMenu("showState", "显示 状态");
+registerMenu("showAttr", "显示 属性位");
+GM_registerMenuCommand("菜单不会立即刷新", () => {});
 
 function parseAttr(attr) {
     if (!attr) return "0";
@@ -22,17 +22,15 @@ function parseAttr(attr) {
     let bits = [];
     for (let i = 0; i < 32; i++) {
         // 检查第 i 位是否为 1
-        if ((val >> i) & 1) {
-            bits.push(i);
-        }
+        if ((val >> i) & 1) bits.push(i);
     }
-    return bits.length > 0 ? bits.join('|') : "0";
+    return bits.length > 0 ? bits.join("|") : "0";
 }
 
 const deepQuery = (root, selector) => {
     let el = root.querySelector(selector);
     if (el) return el;
-    const subs = root.querySelectorAll('*');
+    const subs = root.querySelectorAll("*");
     for (let s of subs) {
         if (s.shadowRoot) {
             el = deepQuery(s.shadowRoot, selector);
@@ -57,7 +55,7 @@ function performInjection(ctx) {
 
     // 这是一个通用的深度查找函数
 
-    const pubdate = deepQuery(shadow, '#pubdate');
+    const pubdate = deepQuery(shadow, "#pubdate");
     if (!pubdate) return;
 
     // 3. 准备信息
@@ -69,11 +67,11 @@ function performInjection(ctx) {
     if (settings.showState && state > 0) text += `状态：${state} `;
     if (settings.showAttr && attr > 0) text += `属性：${parseAttr(attr)} `;
     if (text) {
-        let extra = pubdate.querySelector('.custom-hook-info');
+        let extra = pubdate.querySelector(".custom-hook-info");
         if (!extra) {
-            extra = document.createElement('span');
-            extra.className = 'custom-hook-info';
-            extra.style.marginLeft = '15px';
+            extra = document.createElement("span");
+            extra.className = "custom-hook-info";
+            extra.style.marginLeft = "15px";
             pubdate.appendChild(extra);
         }
         extra.textContent = text;
@@ -81,45 +79,115 @@ function performInjection(ctx) {
 
     if (settings.showIP) {
         // 4. 插入显示信息 (兼容性处理)
-        let ipSpan = pubdate.querySelector('.ip-location');
+        let ipSpan = pubdate.querySelector(".ip-location");
         if (!ipSpan && ip) {
-            ipSpan = document.createElement('span');
-            ipSpan.className = 'ip-location';
-            ipSpan.style.marginLeft = '15px';
+            ipSpan = document.createElement("span");
+            ipSpan.className = "ip-location";
+            ipSpan.style.marginLeft = "15px";
             ipSpan.textContent = ip;
             pubdate.appendChild(ipSpan);
         }
     }
 }
 
+/** 
+ * 调试辅助：查看组件实例上有哪些自定义属性和方法
+ * 选中 bili-comment-replies-renderer
+ * 
+(function (el) {
+    // 1. 获取当前元素的直接原型（即 B站定义的类）
+    const customProto = Object.getPrototypeOf(el);
+    // 2. 获取标准 HTML 元素的属性列表作为参照
+    const nativeProps = Object.getOwnPropertyNames(HTMLElement.prototype);
+
+    // 3. 筛选出不在原生列表中的属性和方法
+    const customStuff = Object.getOwnPropertyNames(customProto).filter(
+        (prop) => {
+            return !nativeProps.includes(prop);
+        },
+    );
+    console.table(
+        customStuff.map((prop) => ({
+            名称: prop,
+            类型: typeof el[prop],
+            当前值: el[prop],
+        })),
+    );
+})($0);
+*/
+
 /**
- * 专门针对菜单组件的注入函数
- * @param {HTMLElement} menuInstance - bili-comment-menu 的实例
+ * 新增功能：回复区注入刷新按钮
+ * 针对组件：bili-comment-replies-renderer
  */
-function injectToMenu(menuInstance) {
-    const options = menuInstance.shadowRoot.querySelector('#options');
-    if (!options || options.querySelector('.custom-update-btn')) return;
+function injectRefreshToReplies(ctx) {
+    const shadow = ctx.shadowRoot;
+    if (!shadow) return;
 
-    // 溯源找到持有数据的父组件
-    // 菜单 -> action-buttons -> renderer (通过 shadow host 向上找)
-    let host = menuInstance.getRootNode()?.host;
-    while (host && !host.__data) {
-        host = host.getRootNode()?.host;
-    }
+    const footer = shadow.querySelector("#expander-footer");
+    if (!footer) return;
 
-    if (host && host.__data) {
-        const li = document.createElement('li');
-        li.className = 'custom-update-btn';
-        li.textContent = '更新状态';
-        li.onclick = (e) => {
-            console.log('更新状态', host.__data);
+    // 清理旧的自定义包裹层，防止重复堆叠
+    footer.querySelector(".custom-wrapper")?.remove();
+
+    // 如果 footer 里面已经有 B 站原生的按钮就跳过
+    if (footer.children.length > 0) return;
+
+    // 辅助函数：创建 Bilibili 原生风格按钮
+    const createBiliBtn = (text, onClick) => {
+        const btn = document.createElement("bili-text-button");
+        btn.innerText = text;
+        btn.onclick = async (e) => {
             e.stopPropagation();
-            // 重新执行父组件的注入逻辑
-            performInjection(host);
-            // 模拟点击关闭菜单
-            document.body.click();
+            await onClick(btn);
+            // footer.querySelector(".custom-wrapper").remove(); // 点击后移除按钮
         };
-        options.appendChild(li);
+        return btn;
+    };
+    const createWrapper = (id) => {
+        const wrapper = document.createElement("div");
+        wrapper.className = "custom-wrapper";
+        wrapper.id = id;
+        return wrapper;
+    };
+
+    const rcount = ctx.data?.rcount ?? 0;
+    const rlist = ctx.list?.length ?? 0;
+
+    if (rlist > 0) {
+        const wrapper = createWrapper("pagination");
+        const wrapperHead = createWrapper("pagination-head");
+        const wrapperFoot = createWrapper("pagination-foot");
+        wrapperHead.innerText = "共1页";
+        const btn = createBiliBtn("收起", async (btn) => {
+            try {
+                ctx.handleRevert();
+            } catch (e) {
+                console.error("收起失败", e);
+            }
+        });
+        wrapperFoot.appendChild(btn);
+        wrapper.appendChild(wrapperHead);
+        wrapper.appendChild(wrapperFoot);
+        footer.appendChild(wrapper);
+    } else {
+        const wrapper = createWrapper("view-more");
+        const refreshSpan = document.createElement("span");
+        refreshSpan.innerText = `共${rcount}条回复，`;
+        const refreshBtn = createBiliBtn(
+            `点击${rcount > 0 ? "查看" : "刷新"}`,
+            async (btn) => {
+                btn.innerText = "正在请求...";
+                try {
+                    await ctx.getList(); // 调用原生加载函数
+                } catch (e) {
+                    console.error("请求回复失败", e);
+                }
+            },
+        );
+        wrapper.appendChild(refreshSpan);
+        wrapper.appendChild(refreshBtn);
+        footer.appendChild(wrapper);
     }
 }
 
@@ -128,9 +196,9 @@ function injectToMenu(menuInstance) {
  * 这是最底层的拦截，当 B站注册评论组件时，我们直接修改组件类
  */
 const targets = [
-    'bili-comment-renderer',        // 主楼容器
-    'bili-comment-reply-renderer',  // 回复容器
-    'bili-comment-menu',            // 菜单容器
+    "bili-comment-renderer", // 主楼容器
+    "bili-comment-reply-renderer", // 回复容器
+    "bili-comment-replies-renderer", // 回复区容器
 ];
 const originalDefine = customElements.define;
 customElements.define = function (name, constructor) {
@@ -149,8 +217,8 @@ customElements.define = function (name, constructor) {
 
             // 执行我们的注入逻辑
             // 放到 microtask 确保渲染彻底完成
-            if (name === 'bili-comment-menu') {
-                injectToMenu(this);
+            if (name === "bili-comment-replies-renderer") {
+                Promise.resolve().then(() => injectRefreshToReplies(this));
             } else {
                 Promise.resolve().then(() => performInjection(this));
             }
