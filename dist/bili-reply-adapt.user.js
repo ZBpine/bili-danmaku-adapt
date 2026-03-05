@@ -2,7 +2,7 @@
 // @name        B站评论显示状态
 // @namespace   https://github.com/ZBpine/bili-danmaku-adapt/
 // @description 评论显示状态，以便知道是否被阿瓦隆。
-// @version     1.1.0
+// @version     1.1.1
 // @author      ZBpine
 // @icon        https://www.bilibili.com/favicon.ico
 // @match       https://www.bilibili.com/*
@@ -34,16 +34,18 @@ registerMenu("showState", "显示 状态");
 registerMenu("showAttr", "显示 属性位");
 GM_registerMenuCommand("菜单不会立即刷新", () => {});
 
-function parseAttr(attr) {
-    if (!attr) return "0";
-    let val = Number(attr);
-    let bits = [];
-    for (let i = 0; i < 32; i++) {
-        // 检查第 i 位是否为 1
-        if ((val >> i) & 1) bits.push(i);
-    }
-    return bits.length > 0 ? bits.join("|") : "0";
-}
+const STATE_MAP = {
+    11: "阿瓦隆 - 异常",
+    17: "阿瓦隆 - 仅自己可见",
+};
+
+const ATTR_MAP = {
+    1: "置顶",
+    7: "广告链接",
+    8: "UP主点赞",
+    9: "UP主回复",
+    27: "带图",
+};
 
 const deepQuery = (root, selector) => {
     let el = root.querySelector(selector);
@@ -58,6 +60,24 @@ const deepQuery = (root, selector) => {
     return null;
 };
 
+function parseAttr(attr) {
+    if (!attr) return null;
+    let str = Number(attr).toString(2);
+    const len = str.length;
+    let bits = [];
+    let descs = [];
+    for (let i = 0; i < len; i++) {
+        if (str[len - 1 - i] === "1") {
+            bits.push(i);
+            const desc = ATTR_MAP[i] || "未知";
+            descs.push(`${i}: ${desc}`);
+        }
+    }
+    return {
+        bits: bits.join("|"),
+        descs: descs.join("\n"),
+    };
+}
 /**
  * 核心注入逻辑
  * @param {HTMLElement} ctx - 组件实例 (this)
@@ -81,19 +101,31 @@ function performInjection(ctx) {
     const state = data.state;
     const attr = data.attr;
 
-    let text = "";
-    if (settings.showState && state > 0) text += `状态：${state} `;
-    if (settings.showAttr && attr > 0) text += `属性：${parseAttr(attr)} `;
-    if (text) {
-        let extra = pubdate.querySelector(".custom-hook-info");
-        if (!extra) {
-            extra = document.createElement("span");
-            extra.className = "custom-hook-info";
-            extra.style.marginLeft = "15px";
-            pubdate.appendChild(extra);
-        }
-        extra.textContent = text;
+    let extra = pubdate.querySelector(".custom-hook-info");
+    if (!extra) {
+        extra = document.createElement("span");
+        extra.className = "custom-hook-info";
+        extra.style.marginLeft = "15px";
     }
+    extra.innerHTML = "";
+    if (settings.showState && state > 0) {
+        const sSpan = document.createElement("span");
+        sSpan.textContent = `状态：${state} `;
+        sSpan.title = STATE_MAP[state] || "未知";
+        // sSpan.style.cursor = "help";
+        extra.appendChild(sSpan);
+    }
+    if (settings.showAttr && attr > 0) {
+        const attrData = parseAttr(attr);
+        if (attrData) {
+            const aSpan = document.createElement("span");
+            // aSpan.style.cursor = "help";
+            aSpan.textContent = `属性：${attrData.bits}`;
+            aSpan.title = attrData.descs;
+            extra.appendChild(aSpan);
+        }
+    }
+    if (extra.innerHTML) pubdate.appendChild(extra);
 
     if (settings.showIP) {
         // 4. 插入显示信息 (兼容性处理)
