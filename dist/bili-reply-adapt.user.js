@@ -2,7 +2,7 @@
 // @name        B站评论显示状态
 // @namespace   https://github.com/ZBpine/bili-danmaku-adapt/
 // @description 评论显示状态，以便知道是否被阿瓦隆。
-// @version     1.1.1
+// @version     1.1.2
 // @author      ZBpine
 // @icon        https://www.bilibili.com/favicon.ico
 // @match       https://www.bilibili.com/*
@@ -20,6 +20,7 @@ const settings = {
     showIP: GM_getValue("showIP", true),
     showState: GM_getValue("showState", true),
     showAttr: GM_getValue("showAttr", true),
+    enhanceRepliesToggle: GM_getValue("enhanceRepliesToggle", true),
 };
 
 function registerMenu(key, label) {
@@ -32,6 +33,7 @@ function registerMenu(key, label) {
 registerMenu("showIP", "显示 IP 属地");
 registerMenu("showState", "显示 状态");
 registerMenu("showAttr", "显示 属性位");
+registerMenu("enhanceRepliesToggle", "增强 回复展开收起");
 GM_registerMenuCommand("菜单不会立即刷新", () => {});
 
 const STATE_MAP = {
@@ -268,7 +270,9 @@ customElements.define = function (name, constructor) {
             // 执行我们的注入逻辑
             // 放到 microtask 确保渲染彻底完成
             if (name === "bili-comment-replies-renderer") {
-                Promise.resolve().then(() => injectRefreshToReplies(this));
+                if (settings.enhanceRepliesToggle) {
+                    Promise.resolve().then(() => injectRefreshToReplies(this));
+                }
             } else {
                 Promise.resolve().then(() => performInjection(this));
             }
