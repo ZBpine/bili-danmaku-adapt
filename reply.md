@@ -27,7 +27,9 @@
 
 *还有不少属性不知道含义，如果用户有自己的发现可以反馈，谢谢🙏*
 
-![阿瓦隆](./img/reply_adapt.example.png)
+> 阿瓦隆仅自己可见如图：
+> 
+> ![阿瓦隆](https://raw.githubusercontent.com/ZBpine/bili-danmaku-adapt/refs/heads/main/img/reply_adapt.example.png)
 
 ---
 

@@ -2,15 +2,13 @@
 // @name        B站弹幕显示发送次数与点赞数
 // @namespace   https://github.com/ZBpine/bili-danmaku-adapt/
 // @description 在弹幕旁边显示发送次数（合并同文本弹幕）与点赞数。
-// @version     1.1.2
+// @version     1.2.0
 // @author      ZBpine
 // @icon        https://www.bilibili.com/favicon.ico
 // @match       https://www.bilibili.com/video/*
 // @match       https://www.bilibili.com/bangumi/play/*
 // @match       https://www.bilibili.com/list/watchlater*
-// @grant       GM_addStyle
-// @grant       GM_xmlhttpRequest
-// @connect     api.bilibili.com
+// @grant       none
 // @run-at      document-start
 // @license     MIT
 // ==/UserScript==
@@ -673,6 +671,7 @@ function castToInteger(v) {
  */
 let groupMap = new Map();   // groupId -> group
 let elMeta = new WeakMap(); // el -> { groupId, memberId, isMaster }
+let memberGroupsMap = new Map(); // memberId -> Set<groupId>
 
 let baseKeyGroups = new Map(); // baseKey -> Set<gid>
 
@@ -707,8 +706,24 @@ function unregisterGroupId(baseKey, gid) {
 }
 function dropGroup(g) {
     if (!g || !groupMap.has(g.id)) return;
+    for (const mid of g.members.keys()) unlinkMemberGroup(mid, g.id);
     groupMap.delete(g.id);
     if (g.baseKey) unregisterGroupId(g.baseKey, g.id);
+}
+
+function linkMemberGroup(mid, gid) {
+    if (!mid || !gid) return;
+    let set = memberGroupsMap.get(mid);
+    if (!set) memberGroupsMap.set(mid, (set = new Set()));
+    set.add(gid);
+}
+
+function unlinkMemberGroup(mid, gid) {
+    if (!mid || !gid) return;
+    const set = memberGroupsMap.get(mid);
+    if (!set) return;
+    set.delete(gid);
+    if (set.size === 0) memberGroupsMap.delete(mid);
 }
 function chooseGroupId(oid, mode, text, dmid, stime) {
     // 不合并：每条一个 group
@@ -776,6 +791,7 @@ function checkOidChange(oid) {
         // 2. 清理点赞缓存
         likesCache.clear();
         likesPending.clear();
+        memberGroupsMap.clear();
     }
 
     currentOid = oid;
@@ -799,32 +815,32 @@ function requestThumbupStats(oid, ids) {
         `?oid=${encodeURIComponent(oid)}` +
         `&ids=${encodeURIComponent(ids.join(","))}`;
 
-    const headers = {
-        "User-Agent": navigator.userAgent,
-        "Referer": "https://www.bilibili.com/",
-    };
+    const timeoutMs = 5000;
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const timer = setTimeout(() => {
+        try { controller?.abort(); } catch { }
+    }, timeoutMs);
 
-    return new Promise((resolve, reject) => {
-        GM_xmlhttpRequest({
-            method: "GET",
-            url,
-            headers,
-            responseType: "json",
-            withCredentials: true,
-            timeout: 8000,
-            onload: (res) => {
-                try {
-                    const json = res.response || JSON.parse(res.responseText);
-                    if (!json || json.code !== 0) return reject(new Error("bad resp"));
-                    resolve(json.data || {});
-                } catch (e) {
-                    reject(e);
-                }
-            },
-            onerror: reject,
-            ontimeout: () => reject(new Error("timeout")),
+    return fetch(url, {
+        method: "GET",
+        credentials: "include",
+        signal: controller?.signal,
+    })
+        .then(async (res) => {
+            const responseText = await res.text();
+            const json = responseText ? JSON.parse(responseText) : null;
+
+            if (!res.ok) throw new Error(`http ${res.status}`);
+            if (!json || json.code !== 0) throw new Error("bad resp");
+            return json.data || {};
+        })
+        .catch((e) => {
+            const aborted = !!(controller && controller.signal && controller.signal.aborted);
+            throw (aborted ? new Error("timeout") : e);
+        })
+        .finally(() => {
+            clearTimeout(timer);
         });
-    });
 }
 
 async function flushLikes() {
@@ -851,18 +867,28 @@ async function flushLikes() {
                 }
 
                 // 回填到 group member，并标记 group dirty
-                for (const g of groupMap.values()) {
-                    let touched = false;
-                    for (const dmid of chunk) {
-                        const mid = memberIdOf(oid, dmid);
+                const touchedGroupIds = new Set();
+                for (const dmid of chunk) {
+                    const mid = memberIdOf(oid, dmid);
+                    const gids = memberGroupsMap.get(mid);
+                    if (!gids || gids.size === 0) continue;
+
+                    const likes = likesCache.get(mid);
+                    if (likes == null) continue;
+
+                    for (const gid of gids) {
+                        const g = groupMap.get(gid);
+                        if (!g) continue;
                         const rec = g.members.get(mid);
-                        if (rec && !rec.likesKnown && likesCache.has(mid)) {
-                            rec.likesKnown = true;
-                            rec.likes = likesCache.get(mid);
-                            touched = true;
-                        }
+                        if (!rec || rec.likesKnown) continue;
+                        rec.likesKnown = true;
+                        rec.likes = likes;
+                        touchedGroupIds.add(gid);
                     }
-                    if (touched) scheduleGroupUpdate(g);
+                }
+                for (const gid of touchedGroupIds) {
+                    const g = groupMap.get(gid);
+                    if (g) scheduleGroupUpdate(g);
                 }
             }
             if (set.size === 0) likesPending.delete(oid);
@@ -1097,6 +1123,7 @@ function onDanmakuStart(el) {
         }
 
         g.members.set(mid, rec);
+        linkMemberGroup(mid, gid);
     }
 
     // 记录 member -> el
@@ -1138,6 +1165,7 @@ function onDanmakuEnd(el, reason) {
     // 从组里移除 member
     g.members.delete(meta.memberId);
     g.memberEls.delete(meta.memberId);
+    unlinkMemberGroup(meta.memberId, meta.groupId);
 
     // 组空了：删组
     if (g.members.size === 0) {
@@ -1303,6 +1331,7 @@ function rebuildAll(reason) {
     groupMap = new Map();
     elMeta = new WeakMap();
     baseKeyGroups = new Map();
+    memberGroupsMap = new Map();
 
     // 只重扫 show
     startShowingDanmaku(container.querySelectorAll?.(`${DM_SELECTOR}.${DM_SHOW_CLASS}`));
@@ -1341,6 +1370,7 @@ const debugAPI = {
     get groupMap() { return groupMap; },
     get elMeta() { return elMeta; },
     get baseKeyGroups() { return baseKeyGroups; },
+    get memberGroupsMap() { return memberGroupsMap; },
     get likesCache() { return likesCache; },
 
     // 辅助：把 WeakMap 里某个元素的 meta 取出来

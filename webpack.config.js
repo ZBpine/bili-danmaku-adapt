@@ -16,7 +16,7 @@ module.exports = [{
             file: "bili-dm-adapt.user.js",
             name: "B站弹幕显示发送次数与点赞数",
             namespace: "https://github.com/ZBpine/bili-danmaku-adapt/",
-            version: "1.1.2",
+            version: "1.2.0",
             description:
                 "在弹幕旁边显示发送次数（合并同文本弹幕）与点赞数。",
             author: "ZBpine",
@@ -28,8 +28,7 @@ module.exports = [{
                     "https://www.bilibili.com/bangumi/play/*",
                     "https://www.bilibili.com/list/watchlater*",
                 ],
-                grant: ["GM_addStyle", "GM_xmlhttpRequest"],
-                connect: ["api.bilibili.com"],
+                grant: ["none"],
                 "run-at": "document-start",
                 license: "MIT",
             },
