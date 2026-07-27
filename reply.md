@@ -41,4 +41,15 @@
 
 ---
 
+### `1.2.0` 新增 专栏投币/阅读数显示
+
+旧版专栏（`https://www.bilibili.com/read/cv*`）可以投币，但是新版图文动态（`https://www.bilibili.com/opus/*`）可能由于bug，只能投币不返回投币数量。而B站又下架了返回旧版的按钮，因此在本脚本添加显示专栏投币/阅读数的功能 ~~（懒得另写脚本）~~。
+
+*图文动态包括专栏，但不止专栏，因此不能将专栏与图文动态划等号，只有文章最下面写了cv号的才是专栏。* **本功能只显示属于专栏的图文动态的投币/阅读数**
+
+<img src="https://raw.githubusercontent.com/ZBpine/bili-danmaku-adapt/refs/heads/main/img/reply_article_example.png" alt="专栏" width="260">
+
+---
 > 技术实现：B站评论区使用Web Components，通过拦截 `customElements.define` API，在组件注册阶段直接修改原型链，实现信息注入。
+> 
+> 专栏投币/阅读数则通过旧版[专栏api](https://github.com/rinnein/bilibili-API-collect/blob/master/docs/article/view.md)获取

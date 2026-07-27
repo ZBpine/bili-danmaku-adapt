@@ -57,7 +57,7 @@ module.exports = [{
             file: "bili-reply-adapt.user.js",
             name: "B站评论显示状态",
             namespace: "https://github.com/ZBpine/bili-danmaku-adapt/",
-            version: "1.1.2",
+            version: "1.2.0",
             description:
                 "评论显示状态，以便知道是否被阿瓦隆。",
             author: "ZBpine",
@@ -69,7 +69,7 @@ module.exports = [{
                     "https://t.bilibili.com/*",
                     "https://space.bilibili.com/*",
                 ],
-                grant: ["GM_registerMenuCommand", "GM_getValue", "GM_setValue"],
+                grant: ["GM_registerMenuCommand", "GM_getValue", "GM_setValue", "unsafeWindow"],
                 "run-at": "document-start",
                 license: "MIT",
             },
