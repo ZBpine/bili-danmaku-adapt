@@ -2,7 +2,7 @@
 // @name        B站弹幕显示发送次数与点赞数
 // @namespace   https://github.com/ZBpine/bili-danmaku-adapt/
 // @description 在弹幕旁边显示发送次数（合并同文本弹幕）与点赞数。
-// @version     1.2.0
+// @version     1.2.1
 // @author      ZBpine
 // @icon        https://www.bilibili.com/favicon.ico
 // @match       https://www.bilibili.com/video/*
@@ -350,28 +350,32 @@ function createUI({ config, saveConfig, rebuildAll, refreshAll, castToInteger })
 
 /**
  * =========================
- * 0) 小工具：日志 / 配置
+ * 0) 小工具：配置
  * =========================
  */
-const console = new Proxy(window.console, {
-    get(target, prop) {
-        const original = target[prop];
-        if (typeof original === "function" && (prop === "log" || prop === "error" || prop === "warn")) {
-            return (...args) =>
-                original.call(
-                    target,
-                    "%cDanmaku Adapt",
-                    {
-                        log: "background:#01a1d6;",
-                        warn: "background:#d6a001;",
-                        error: "background:#d63601;",
-                    }[prop] + "color:#fff;padding:2px 6px;border-radius:3px;font-weight:bold;",
-                    ...args
-                );
-        }
-        return original;
-    },
-});
+// =========================
+// 0.5) 日志收集器：收集到缓冲区，debugAPI.viewLogs() 查看，不刷屏
+// =========================
+const LOG_CAP = 300;
+const logBuffer = [];
+let logSeq = 0;
+function pushLog(level, msg, extra) {
+    logBuffer.push({ seq: logSeq++, t: Date.now(), level, msg, extra: extra ?? null });
+    if (logBuffer.length > LOG_CAP) logBuffer.shift();
+}
+const logger = {
+    debug: (m, e) => pushLog("debug", m, e),
+    info:  (m, e) => pushLog("info", m, e),
+    warn:  (m, e) => pushLog("warn", m, e),
+    error: (m, e) => pushLog("error", m, e),
+};
+
+// 跨世界桥：hook 被序列化注入到页面主世界执行，访问不到本作用域变量。
+// 通过 window 暴露入口，让 hook 把诊断日志喂进独立的 hookDiagBuffer（hookDiag() 可看，不设上限）。
+const hookDiagBuffer = [];
+window.__DM_ADAPT_HOOKLOG__ = (msg, extra) => {
+    try { hookDiagBuffer.push({ t: Date.now(), msg, extra: extra ?? null }); } catch { }
+};
 
 const STORAGE_KEY = "tm_dm_adapt_cfg_v1";
 const DEFAULT_CFG = {
@@ -416,7 +420,8 @@ function loadConfig() {
     try {
         const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null") || {};
         return apply(cfg, saved);
-    } catch {
+    } catch (e) {
+        logger.warn("loadConfig parse failed, using defaults", String(e));
         return cfg;
     }
 }
@@ -464,7 +469,9 @@ function opacityFromHotness(sendCount, likes) {
 function saveConfig() {
     try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
-    } catch { }
+    } catch (e) {
+        logger.warn("saveConfig failed", String(e));
+    }
 }
 
 injectStyles();
@@ -486,19 +493,22 @@ injectToPageContext(function () {
     if (window.__DM_ADAPT_HOOK_INSTALLED__) return;
     window.__DM_ADAPT_HOOK_INSTALLED__ = true;
 
-    const FINGERPRINT = ["aria-live", "role", "comment", "--fontSize"]; // render源码指纹
+    const FINGERPRINT = ["--opacity", "--fontSize", "--fontFamily", "--fontWeight", "--color", "aria-live", "role", "comment"]; // render源码指纹
     const define = Object.defineProperty;
     const orig = Object.getOwnPropertyDescriptor(Object.prototype, "render");
 
     function fnStr(fn) {
         try { return Function.prototype.toString.call(fn); } catch { return ""; }
     }
-    function looksLikeDanmakuRender(fn) {
-        if (typeof fn !== "function") return false;
+    function countHits(fn) {
+        if (typeof fn !== "function") return 0;
         const s = fnStr(fn);
         let hit = 0;
         for (const k of FINGERPRINT) if (s.includes(k)) hit++;
-        return hit >= 2;
+        return hit;
+    }
+    function looksLikeDanmakuRender(fn) {
+        return countHits(fn) >= 5;
     }
     function toHexColor(c) {
         try {
@@ -528,13 +538,26 @@ injectToPageContext(function () {
             try {
                 const el = this?.element;
                 const td = this?.textData;
-                if (!(el instanceof HTMLElement) || !td) return ret;
+                if (!(el instanceof HTMLElement) || !td) {
+                    window.__DM_ADAPT_HOOKLOG__("[dm-adapt] render 跑过但 el/td 缺失（属性形状可能不对）", {
+                        className: typeof el?.className === "string" ? el.className : undefined,
+                        thisKeys: Object.keys(this || {}).slice(0, 40),
+                        hasTextData: !!(this && "textData" in this),
+                    });
+                    return ret;
+                }
 
                 const dmid = td.dmid ?? td.id_str;
                 const oid = td.oid ?? td.cid;
                 const mode = td.rawMode ?? td.mode;
                 const stime = td.stime;
                 const colorHex = toHexColor(td.color);
+
+                if (dmid == null && oid == null) window.__DM_ADAPT_HOOKLOG__("[dm-adapt] 已包 render 但 oid/dmid 取不到", {
+                    className: el.className,
+                    tdKeys: Object.keys(td).slice(0, 40),
+                    sample: { dmid: td.dmid, id_str: td.id_str, oid: td.oid, cid: td.cid },
+                });
 
                 if (dmid != null) el.dataset.dmid = String(dmid);
                 if (oid != null) el.dataset.oid = String(oid);
@@ -570,9 +593,14 @@ injectToPageContext(function () {
         enumerable: false,
         get() { return undefined; },
         set(v) {
+            window.__DM_ADAPT_HOOKLOG__("[dm-adapt] render 赋值", {
+                hits: countHits(v),
+                matched: looksLikeDanmakuRender(v),
+                src: fnStr(v).slice(0, 100),
+            });
             if (looksLikeDanmakuRender(v)) {
                 define(this, "render", { value: wrapRender(v), writable: true, enumerable: true, configurable: true });
-                console.log("Danmaku render hooked.");
+                window.__DM_ADAPT_HOOKLOG__("Danmaku render hooked.");
                 restore(); // 命中一次就恢复
                 return;
             }
@@ -782,7 +810,7 @@ function checkOidChange(oid) {
 
     // 第一次运行或 oid 发生变化
     if (currentOid !== null && currentOid !== oid) {
-        console.log(`oid 改变: ${currentOid} -> ${oid}. 清除缓存`);
+        logger.info(`oid 改变: ${currentOid} -> ${oid}. 清除缓存`);
 
         // 1. 清理弹幕组
         groupMap.clear();
@@ -894,7 +922,7 @@ async function flushLikes() {
             if (set.size === 0) likesPending.delete(oid);
         }
     } catch (e) {
-        console.warn("flushLikes failed, retry later", String(e));
+        logger.warn("flushLikes failed, retry later", String(e));
         if (likesPending.size) likesFlushTimer = setTimeout(flushLikes, 1200);
     } finally {
         likesInflight = false;
@@ -903,7 +931,7 @@ async function flushLikes() {
             for (let i = 0; i < 1000; i++) {
                 likesCache.delete(keys[i]);
             }
-            console.log("清理部分弹幕点赞缓存");
+            logger.info("清理部分弹幕点赞缓存");
         }
     }
 }
@@ -1042,6 +1070,8 @@ function scheduleGroupUpdate(g) {
     });
 }
 
+let firstDanmakuLogged = false;
+
 function onDanmakuStart(el) {
     if (!(el instanceof HTMLElement)) return;
     if (!el.classList.contains("bili-danmaku-x-dm")) return;
@@ -1142,6 +1172,11 @@ function onDanmakuStart(el) {
 
     elMeta.set(el, { groupId: gid, memberId: mid, isMaster });
 
+    if (!firstDanmakuLogged) {
+        firstDanmakuLogged = true;
+        logger.info("首个弹幕已纳入管理", { oid, dmid, mode });
+    }
+
     // 更新（合并渲染 + badge）
     scheduleGroupUpdate(g);
 }
@@ -1210,7 +1245,7 @@ function collectDanmakuEls(node) {
     return out;
 }
 
-function startObserverOn(container) {
+function startObserverOn(container, source = "直接") {
     if (!container || container.__dmAdaptObserverInstalled) return false;
     container.__dmAdaptObserverInstalled = true;
 
@@ -1283,22 +1318,25 @@ function startObserverOn(container) {
     // 初次：只扫 show 的（避免对象池内的旧弹幕）
     startShowingDanmaku(container.querySelectorAll?.(`${DM_SELECTOR}.${DM_SHOW_CLASS}`));
 
+    logger.info("弹幕 Observer 已挂载（" + source + "）");
     return true;
 }
 
 function bootObserver() {
     const container = document.querySelector(DM_CONTAINER_SELECTOR);
-    if (container) return startObserverOn(container);
+    if (container) return startObserverOn(container, "直接");
 
     // 容器可能晚出现/被重建：轮询 + body 兜底
+    logger.info("弹幕容器未就绪，启动轮询(300ms)+body 兜底");
+
     const timer = setInterval(() => {
         const c = document.querySelector(DM_CONTAINER_SELECTOR);
-        if (c && startObserverOn(c)) clearInterval(timer);
+        if (c && startObserverOn(c, "轮询")) clearInterval(timer);
     }, 300);
 
     const bodyObs = new MutationObserver(() => {
         const c = document.querySelector(DM_CONTAINER_SELECTOR);
-        if (c) startObserverOn(c);
+        if (c) startObserverOn(c, "body 兜底");
     });
 
     const startBody = () => bodyObs.observe(document.body, { childList: true, subtree: true });
@@ -1316,7 +1354,7 @@ bootObserver();
  */
 function refreshAll(reason) {
     for (const g of groupMap.values()) scheduleGroupUpdate(g);
-    console.log("refresh", reason);
+    logger.info("refresh", reason);
 }
 
 function rebuildAll(reason) {
@@ -1336,7 +1374,7 @@ function rebuildAll(reason) {
     // 只重扫 show
     startShowingDanmaku(container.querySelectorAll?.(`${DM_SELECTOR}.${DM_SHOW_CLASS}`));
 
-    console.log("rebuild", reason);
+    logger.info("rebuild", reason);
 }
 
 /**
@@ -1400,7 +1438,7 @@ const debugAPI = {
         saveConfig();
         refreshAll("setBadgeHighlightCurve");
 
-        console.log("badgeHighlightCurve updated", curve, "k=", badgeHighlightK);
+        logger.info("badgeHighlightCurve updated", { curve, k: badgeHighlightK });
     },
     opacityFromHotness(sendCount, likes) { return opacityFromHotness(sendCount, likes); },
     // 输入文本片段查询当前在屏幕上的弹幕组（不重算任何参数，只输出已有数据）
@@ -1454,6 +1492,97 @@ const debugAPI = {
 
         // 返回完整对象（里面有 element 引用，方便你继续点进去看）
         return out;
+    },
+
+    // 单条弹幕诊断：传 Elements 面板选中的 el（如 $0），逐层判它卡在选中管线的哪一关
+    // verdict: managed | not-dm | not-showing | missing-data | not-processed | orphan | not-element
+    inspectEl(el) {
+        let verdict, detail, groupId, isMaster;
+        const dataset = (el instanceof HTMLElement) ? { ...el.dataset } : null;
+
+        if (!(el instanceof HTMLElement)) {
+            verdict = "not-element";
+            detail = "传入的不是 HTMLElement";
+        } else if (!el.classList.contains("bili-danmaku-x-dm")) {
+            verdict = "not-dm";
+            detail = "不含 bili-danmaku-x-dm";
+        } else if (!isShowing(el)) {
+            verdict = "not-showing";
+            detail = "未带 bili-danmaku-x-show（对象池未激活/已隐藏）";
+        } else if (!(dataset.oid && dataset.dmid)) {
+            verdict = "missing-data";
+            detail = "hook 未写入 oid/dmid（data-* 缺失）";
+        } else {
+            const meta = elMeta.get(el);
+            if (!meta) {
+                verdict = "not-processed";
+                detail = "通过 data 校验但未被 onDanmakuStart 纳入（text 空 / mergeSame 缺 mode / 回调未触发）";
+            } else {
+                const g = groupMap.get(meta.groupId);
+                if (!g) {
+                    verdict = "orphan";
+                    detail = "group 已被 dropGroup 清理，elMeta 残留";
+                    groupId = meta.groupId;
+                } else {
+                    verdict = "managed";
+                    detail = "已被脚本选中并管理";
+                    groupId = meta.groupId;
+                    isMaster = !!meta.isMaster;
+                }
+            }
+        }
+
+        const res = { el, dataset, verdict, detail };
+        if (groupId !== undefined) res.groupId = groupId;
+        if (isMaster !== undefined) res.isMaster = isMaster;
+        return res;
+    },
+
+    // 输出容器里所有弹幕：默认含对象池未显示的；opts.showing=true 仅 show 状态
+    // 每行带 managed 状态，直接回答“脚本有没有选中这条弹幕DOM”
+    dumpDanmaku(opts = {}) {
+        const container = document.querySelector(DM_CONTAINER_SELECTOR);
+        if (!container) { logger.warn("dumpDanmaku: 容器未找到"); return []; }
+
+        const onlyShowing = !!(opts && opts.showing);
+        const selector = onlyShowing ? `${DM_SELECTOR}.${DM_SHOW_CLASS}` : DM_SELECTOR;
+        const els = Array.from(container.querySelectorAll(selector));
+
+        const out = els.map((el) => ({
+            el,
+            dataset: { ...el.dataset },
+            managed: elMeta.get(el) ? 1 : 0,
+        }));
+
+        return out;
+    },
+
+    // 日志：收集到缓冲区，viewLogs 查看（不刷屏）
+    get logs() { return logBuffer.slice(); },
+    viewLogs(limit = 50) {
+        const arr = logBuffer.slice(-limit);
+        const rows = arr.map((x) => ({
+            "#": x.seq,
+            time: new Date(x.t).toLocaleTimeString(),
+            level: x.level,
+            msg: x.msg,
+            extra: x.extra != null
+                ? (typeof x.extra === "string" ? x.extra : JSON.stringify(x.extra))
+                : "",
+        }));
+        console.table(rows);
+        return arr;
+    },
+    clearLogs() {
+        logBuffer.length = 0;
+    },
+
+    // hook 诊断日志（独立数组：render 赋值 / wrapper 异常分支；不设上限）
+    hookDiag() {
+        return hookDiagBuffer;
+    },
+    clearHookDiag() {
+        hookDiagBuffer.length = 0;
     },
 };
 
