@@ -1,4 +1,4 @@
-# B站弹幕显示发送次数与点赞数
+# B站弹幕合并与显示点赞数
 
 在 B 站播放器弹幕旁显示：
 - **发送次数**（同文本弹幕合并后的出现次数）
@@ -28,6 +28,9 @@
 
 ![danmaku_adapt_example.jpg](./img/danmaku_adapt_example.jpg)
 
+> 被合并的弹幕只是不显示，依旧占着弹幕轨道位置，所以不会有补位的弹幕，可以防止弹幕刷屏。
+
+![danmaku_adapt_example_3.jpg](./img/danmaku_adapt_example_3.png)
 
 ## 安装
 

@@ -15,7 +15,7 @@
     text-shadow: var(--textShadow, 1px 0 1px #000000, 0 1px 1px #000000, 0 -1px 1px #000000, -1px 0 1px #000000);
 }
 
-.tm-danmaku-badge svg {
+.bili-danmaku-x-dm .tm-danmaku-badge svg {
     width: 1em;
     height: 1em;
     flex: 0 0 auto;
