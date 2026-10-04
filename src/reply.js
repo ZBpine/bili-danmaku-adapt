@@ -1,36 +1,40 @@
+import { createReplySettings } from "./reply-settings.js";
+
 const settings = {
     showIP: GM_getValue("showIP", true),
     showState: GM_getValue("showState", true),
     showAttr: GM_getValue("showAttr", true),
     enhanceRepliesToggle: GM_getValue("enhanceRepliesToggle", true),
+    showZeroReplyRefresh: GM_getValue("showZeroReplyRefresh", GM_getValue("enhanceRepliesToggle", true)),
     showArticleStats: GM_getValue("showArticleStats", true),
 };
 
-function registerMenu(key, label) {
-    GM_registerMenuCommand(`${settings[key] ? "✅" : "❌"} ${label}`, () => {
-        settings[key] = !settings[key];
-        GM_setValue(key, settings[key]);
-        // location.reload(); // 刷新页面使设置生效
+const { injectMenuSettings } = createReplySettings(settings, () => {
+    visitCommentComponents((ctx) => {
+        if (ctx.localName === "bili-comment-replies-renderer") injectRefreshToReplies(ctx);
+        else if (ctx.localName !== "bili-comment-menu") performInjection(ctx);
     });
-}
-registerMenu("showIP", "显示 IP 属地");
-registerMenu("showState", "显示 状态");
-registerMenu("showAttr", "显示 属性位");
-registerMenu("enhanceRepliesToggle", "增强 回复展开收起");
-registerMenu("showArticleStats", "显示专栏观看/投币数");
-GM_registerMenuCommand("菜单不会立即刷新", () => {});
+});
 
 const STATE_MAP = {
-    11: "阿瓦隆 - 异常",
+    11: "阿瓦隆 - 审核状态",
     17: "阿瓦隆 - 仅自己可见",
+    18: "阿瓦隆 - 恶意评论",
 };
 
 const ATTR_MAP = {
     1: "置顶",
+    4: "妙评",
     7: "广告链接",
     8: "UP主点赞",
     9: "UP主回复",
+    15: "热评",
+    17: "仅自己可见",
+    21: "仅自己可见",
+    22: "仅自己可见",
+    25: "妙评",
     27: "带图",
+    36: "恶意评论",
 };
 
 const deepQuery = (root, selector) => {
@@ -111,19 +115,22 @@ function performInjection(ctx) {
             extra.appendChild(aSpan);
         }
     }
-    if (extra.innerHTML) pubdate.appendChild(extra);
-
-    if (settings.showIP) {
-        // 4. 插入显示信息 (兼容性处理)
-        let ipSpan = pubdate.querySelector(".ip-location");
-        if (!ipSpan && ip) {
+    // 兼容其他插件的 .ip-location；只更新或移除本脚本插入的节点。
+    let ipSpan = pubdate.querySelector(".custom-hook-ip");
+    const otherIP = pubdate.querySelector(".ip-location:not(.custom-hook-ip)");
+    if (settings.showIP && ip && !otherIP) {
+        if (!ipSpan) {
             ipSpan = document.createElement("span");
-            ipSpan.className = "ip-location";
+            ipSpan.className = "ip-location custom-hook-ip";
             ipSpan.style.marginLeft = "15px";
-            ipSpan.textContent = ip;
             pubdate.appendChild(ipSpan);
         }
-    }
+        ipSpan.textContent = ip;
+    } else ipSpan?.remove();
+
+    // 最后追加状态/属性，确保它们排在 IP 属地之后（也包括其他插件的属地）。
+    if (extra.childElementCount) pubdate.appendChild(extra);
+    else extra.remove();
 }
 
 /** 
@@ -169,6 +176,11 @@ function injectRefreshToReplies(ctx) {
     // 如果 footer 里面已经有 B 站原生的按钮就跳过
     if (footer.children.length > 0) return;
 
+    const rcount = ctx.data?.rcount ?? 0;
+    const rlist = ctx.list?.length ?? 0;
+    const zeroReplies = rlist === 0 && rcount <= 0;
+    if (zeroReplies ? !settings.showZeroReplyRefresh : !settings.enhanceRepliesToggle) return;
+
     // 辅助函数：创建 Bilibili 原生风格按钮
     const createBiliBtn = (text, onClick) => {
         const btn = document.createElement("bili-text-button");
@@ -186,9 +198,6 @@ function injectRefreshToReplies(ctx) {
         wrapper.id = id;
         return wrapper;
     };
-
-    const rcount = ctx.data?.rcount ?? 0;
-    const rlist = ctx.list?.length ?? 0;
 
     if (rlist > 0) {
         const wrapper = createWrapper("pagination");
@@ -235,36 +244,47 @@ const targets = [
     "bili-comment-renderer", // 主楼容器
     "bili-comment-reply-renderer", // 回复容器
     "bili-comment-replies-renderer", // 回复区容器
+    "bili-comment-menu", // 原生菜单内的设置入口
 ];
-const originalDefine = customElements.define;
-customElements.define = function (name, constructor) {
-    if (targets.includes(name)) {
-        // 获取 Lit 组件的原型
-        const proto = constructor.prototype;
+const hookedPrototypes = new WeakSet();
 
-        // 拦截 updated 生命周期方法
-        // Lit 在 DOM 更新完成后会自动调用 updated(changedProperties)
-        const originalUpdated = proto.updated;
-        proto.updated = function (changedProperties) {
-            // 先执行原有的渲染逻辑
-            if (originalUpdated) {
-                originalUpdated.call(this, changedProperties);
-            }
+function injectComponent(name, ctx) {
+    if (name === "bili-comment-menu") injectMenuSettings(ctx);
+    else if (name === "bili-comment-replies-renderer") injectRefreshToReplies(ctx);
+    else performInjection(ctx);
+}
 
-            // 执行我们的注入逻辑
-            // 放到 microtask 确保渲染彻底完成
-            if (name === "bili-comment-replies-renderer") {
-                if (settings.enhanceRepliesToggle) {
-                    Promise.resolve().then(() => injectRefreshToReplies(this));
-                }
-            } else {
-                Promise.resolve().then(() => performInjection(this));
-            }
-        };
+// 设置切换时才遍历现有 Shadow DOM；平时继续使用组件生命周期更新。
+function visitCommentComponents(callback, root = document) {
+    for (const el of root.querySelectorAll("*")) {
+        if (targets.includes(el.localName)) callback(el);
+        if (el.shadowRoot) visitCommentComponents(callback, el.shadowRoot);
     }
+}
 
-    return originalDefine.call(this, name, constructor);
+function hookComponent(name, constructor) {
+    const proto = constructor.prototype;
+    if (hookedPrototypes.has(proto)) return;
+    hookedPrototypes.add(proto);
+    const originalUpdated = proto.updated;
+    proto.updated = function (changedProperties) {
+        originalUpdated?.call(this, changedProperties);
+        Promise.resolve().then(() => injectComponent(name, this));
+    };
+}
+
+const originalDefine = customElements.define;
+customElements.define = function (name, constructor, options) {
+    if (targets.includes(name)) hookComponent(name, constructor);
+    return originalDefine.call(this, name, constructor, options);
 };
+for (const name of targets) {
+    const constructor = customElements.get(name);
+    if (constructor) hookComponent(name, constructor);
+}
+const injectExisting = () => visitCommentComponents((ctx) => injectComponent(ctx.localName, ctx));
+if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", injectExisting, { once: true });
+else injectExisting();
 
 // ===================== 专栏(opus)观看/投币数注入 =====================
 // 在 opus 动态页（转发了专栏时），把专栏的观看数/投币数写进右侧 side-toolbar。

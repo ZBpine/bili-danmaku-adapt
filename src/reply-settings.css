@@ -1,0 +1,80 @@
+:host {
+    font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+    color-scheme: light dark;
+}
+dialog {
+    box-sizing: border-box;
+    width: min(360px, calc(100vw - 32px));
+    max-height: calc(100vh - 32px);
+    overflow: auto;
+    margin: auto;
+    padding: 0;
+    border: 1px solid var(--line_regular, #e3e5e7);
+    border-radius: 12px;
+    background: var(--bg1_float, #fff);
+    color: var(--text1, #18191c);
+    box-shadow: 0 12px 48px #0003;
+    font-size: 14px;
+}
+dialog::backdrop { background: #0005; }
+header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 18px 20px 12px;
+}
+h2 { margin: 0; font-size: 17px; font-weight: 600; }
+.close {
+    width: 30px;
+    height: 30px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text3, #9499a0);
+    font-size: 24px;
+    cursor: pointer;
+}
+.close:hover { background: var(--graph_bg_regular_float, #f1f2f3); }
+.options { padding: 0 20px 8px; }
+.option {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 14px 0;
+    cursor: pointer;
+}
+.option + .option { border-top: 1px solid var(--line_light, #f1f2f3); }
+input {
+    appearance: none;
+    flex: 0 0 36px;
+    width: 36px;
+    height: 20px;
+    margin: 0;
+    border: 0;
+    border-radius: 10px;
+    background: var(--graph_bg_thick, #c9ccd0);
+    cursor: pointer;
+    transition: background 0.15s;
+}
+input::before {
+    content: "";
+    display: block;
+    width: 16px;
+    height: 16px;
+    margin: 2px;
+    border-radius: 50%;
+    background: #fff;
+    transition: transform 0.15s;
+}
+input:checked { background: var(--brand_blue, #00aeec); }
+input:checked::before { transform: translateX(16px); }
+input:focus-visible, button:focus-visible { outline: 2px solid var(--brand_blue, #00aeec); outline-offset: 3px; }
+@media (prefers-color-scheme: dark) {
+    dialog { background: var(--bg1_float, #252628); color: var(--text1, #f1f2f3); border-color: var(--line_regular, #444); }
+    .option + .option { border-color: var(--line_light, #38393b); }
+    .close:hover { background: var(--graph_bg_regular_float, #38393b); }
+}
+@media (prefers-reduced-motion: reduce) {
+    input, input::before { transition: none; }
+}

@@ -2,13 +2,14 @@
 // @name        B站评论显示状态
 // @namespace   https://github.com/ZBpine/bili-danmaku-adapt/
 // @description 评论显示状态，以便知道是否被阿瓦隆。
-// @version     1.2.0
+// @version     1.2.1
 // @author      ZBpine
 // @icon        https://www.bilibili.com/favicon.ico
 // @match       https://www.bilibili.com/*
 // @match       https://t.bilibili.com/*
 // @match       https://space.bilibili.com/*
 // @grant       GM_registerMenuCommand
+// @grant       GM_unregisterMenuCommand
 // @grant       GM_getValue
 // @grant       GM_setValue
 // @grant       unsafeWindow
@@ -17,39 +18,150 @@
 // ==/UserScript==
 
 /******/ (() => { // webpackBootstrap
+/******/ 	"use strict";
+
+;// ./src/reply-settings.css
+const reply_settings_namespaceObject = ":host {\n    font-family: \"PingFang SC\", \"Microsoft YaHei\", sans-serif;\n    color-scheme: light dark;\n}\ndialog {\n    box-sizing: border-box;\n    width: min(360px, calc(100vw - 32px));\n    max-height: calc(100vh - 32px);\n    overflow: auto;\n    margin: auto;\n    padding: 0;\n    border: 1px solid var(--line_regular, #e3e5e7);\n    border-radius: 12px;\n    background: var(--bg1_float, #fff);\n    color: var(--text1, #18191c);\n    box-shadow: 0 12px 48px #0003;\n    font-size: 14px;\n}\ndialog::backdrop { background: #0005; }\nheader {\n    display: flex;\n    align-items: center;\n    justify-content: space-between;\n    padding: 18px 20px 12px;\n}\nh2 { margin: 0; font-size: 17px; font-weight: 600; }\n.close {\n    width: 30px;\n    height: 30px;\n    border: 0;\n    border-radius: 6px;\n    background: transparent;\n    color: var(--text3, #9499a0);\n    font-size: 24px;\n    cursor: pointer;\n}\n.close:hover { background: var(--graph_bg_regular_float, #f1f2f3); }\n.options { padding: 0 20px 8px; }\n.option {\n    display: flex;\n    align-items: center;\n    justify-content: space-between;\n    gap: 16px;\n    padding: 14px 0;\n    cursor: pointer;\n}\n.option + .option { border-top: 1px solid var(--line_light, #f1f2f3); }\ninput {\n    appearance: none;\n    flex: 0 0 36px;\n    width: 36px;\n    height: 20px;\n    margin: 0;\n    border: 0;\n    border-radius: 10px;\n    background: var(--graph_bg_thick, #c9ccd0);\n    cursor: pointer;\n    transition: background 0.15s;\n}\ninput::before {\n    content: \"\";\n    display: block;\n    width: 16px;\n    height: 16px;\n    margin: 2px;\n    border-radius: 50%;\n    background: #fff;\n    transition: transform 0.15s;\n}\ninput:checked { background: var(--brand_blue, #00aeec); }\ninput:checked::before { transform: translateX(16px); }\ninput:focus-visible, button:focus-visible { outline: 2px solid var(--brand_blue, #00aeec); outline-offset: 3px; }\n@media (prefers-color-scheme: dark) {\n    dialog { background: var(--bg1_float, #252628); color: var(--text1, #f1f2f3); border-color: var(--line_regular, #444); }\n    .option + .option { border-color: var(--line_light, #38393b); }\n    .close:hover { background: var(--graph_bg_regular_float, #38393b); }\n}\n@media (prefers-reduced-motion: reduce) {\n    input, input::before { transition: none; }\n}\n";
+;// ./src/reply-settings.js
+
+
+const COMMENT_OPTIONS = [
+    ["showIP", "显示 IP 属地"],
+    ["showState", "显示状态"],
+    ["showAttr", "显示属性位"],
+    ["enhanceRepliesToggle", "增强回复展开 / 收起"],
+    ["showZeroReplyRefresh", "0 回复时显示刷新"],
+];
+
+function createReplySettings(settings, onChange) {
+    let dialog;
+    let inputs;
+
+    function openSettings() {
+        if (!dialog) {
+            const host = document.createElement("div");
+            host.id = "bili-reply-adapt-settings";
+            const shadow = host.attachShadow({ mode: "open" });
+            shadow.innerHTML = `<style>${reply_settings_namespaceObject}</style>
+                <dialog aria-labelledby="settings-title">
+                    <header>
+                        <h2 id="settings-title">评论增强设置</h2>
+                        <button type="button" class="close" aria-label="关闭设置">×</button>
+                    </header>
+                    <div class="options"></div>
+                </dialog>`;
+            (document.body || document.documentElement).appendChild(host);
+            dialog = shadow.querySelector("dialog");
+            inputs = new Map();
+            const options = shadow.querySelector(".options");
+            for (const [key, label] of COMMENT_OPTIONS) {
+                const row = document.createElement("label");
+                row.className = "option";
+                row.innerHTML = `<span>${label}</span>
+                    <input type="checkbox" role="switch" aria-label="${label}">`;
+                const input = row.querySelector("input");
+                input.addEventListener("change", () => {
+                    settings[key] = input.checked;
+                    GM_setValue(key, input.checked);
+                    onChange(key);
+                });
+                inputs.set(key, input);
+                options.appendChild(row);
+            }
+            shadow.querySelector(".close").addEventListener("click", () => dialog.close());
+            dialog.addEventListener("click", (event) => {
+                // dialog 的 backdrop 点击仍以 dialog 为 target；不把面板内部空白当成关闭。
+                const rect = dialog.getBoundingClientRect();
+                if (event.target === dialog && (event.clientX < rect.left || event.clientX > rect.right
+                    || event.clientY < rect.top || event.clientY > rect.bottom)) dialog.close();
+            });
+        }
+        for (const [key, input] of inputs) input.checked = settings[key];
+        if (!dialog.open) dialog.showModal();
+    }
+
+    GM_registerMenuCommand("评论增强设置…", openSettings);
+    if (location.pathname.startsWith("/opus/")) {
+        let articleMenuId;
+        const registerArticleMenu = () => {
+            articleMenuId = GM_registerMenuCommand(
+                `${settings.showArticleStats ? "✅" : "❌"} 专栏阅读 / 投币数（刷新后生效）`,
+                () => {
+                    settings.showArticleStats = !settings.showArticleStats;
+                    GM_setValue("showArticleStats", settings.showArticleStats);
+                    GM_unregisterMenuCommand(articleMenuId);
+                    registerArticleMenu();
+                },
+            );
+        };
+        registerArticleMenu();
+    }
+
+    function injectMenuSettings(menu) {
+        const options = menu.shadowRoot?.querySelector("#options");
+        if (!options || options.querySelector(".reply-adapt-settings-entry")) return;
+        const entry = document.createElement("li");
+        entry.className = "reply-adapt-settings-entry";
+        entry.textContent = "评论增强设置";
+        entry.setAttribute("role", "menuitem");
+        entry.tabIndex = 0;
+        entry.style.borderTop = "1px solid var(--line_regular, #e3e5e7)";
+        const open = (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            // 原生父组件用此状态控制菜单；不派发 select，避免触发举报等原生 action。
+            const owner = menu.getRootNode().host;
+            if (owner && "showMoreMenu" in owner) owner.showMoreMenu = false;
+            openSettings();
+        };
+        entry.addEventListener("click", open);
+        entry.addEventListener("keydown", (event) => {
+            if (event.key === "Enter" || event.key === " ") open(event);
+        });
+        options.appendChild(entry);
+    }
+
+    return { injectMenuSettings };
+}
+
+;// ./src/reply.js
+
+
 const settings = {
     showIP: GM_getValue("showIP", true),
     showState: GM_getValue("showState", true),
     showAttr: GM_getValue("showAttr", true),
     enhanceRepliesToggle: GM_getValue("enhanceRepliesToggle", true),
+    showZeroReplyRefresh: GM_getValue("showZeroReplyRefresh", GM_getValue("enhanceRepliesToggle", true)),
     showArticleStats: GM_getValue("showArticleStats", true),
 };
 
-function registerMenu(key, label) {
-    GM_registerMenuCommand(`${settings[key] ? "✅" : "❌"} ${label}`, () => {
-        settings[key] = !settings[key];
-        GM_setValue(key, settings[key]);
-        // location.reload(); // 刷新页面使设置生效
+const { injectMenuSettings } = createReplySettings(settings, () => {
+    visitCommentComponents((ctx) => {
+        if (ctx.localName === "bili-comment-replies-renderer") injectRefreshToReplies(ctx);
+        else if (ctx.localName !== "bili-comment-menu") performInjection(ctx);
     });
-}
-registerMenu("showIP", "显示 IP 属地");
-registerMenu("showState", "显示 状态");
-registerMenu("showAttr", "显示 属性位");
-registerMenu("enhanceRepliesToggle", "增强 回复展开收起");
-registerMenu("showArticleStats", "显示专栏观看/投币数");
-GM_registerMenuCommand("菜单不会立即刷新", () => {});
+});
 
 const STATE_MAP = {
-    11: "阿瓦隆 - 异常",
+    11: "阿瓦隆 - 审核状态",
     17: "阿瓦隆 - 仅自己可见",
+    18: "阿瓦隆 - 恶意评论",
 };
 
 const ATTR_MAP = {
     1: "置顶",
+    4: "妙评",
     7: "广告链接",
     8: "UP主点赞",
     9: "UP主回复",
+    15: "热评",
+    17: "仅自己可见",
+    21: "仅自己可见",
+    22: "仅自己可见",
+    25: "妙评",
     27: "带图",
+    36: "恶意评论",
 };
 
 const deepQuery = (root, selector) => {
@@ -130,19 +242,22 @@ function performInjection(ctx) {
             extra.appendChild(aSpan);
         }
     }
-    if (extra.innerHTML) pubdate.appendChild(extra);
-
-    if (settings.showIP) {
-        // 4. 插入显示信息 (兼容性处理)
-        let ipSpan = pubdate.querySelector(".ip-location");
-        if (!ipSpan && ip) {
+    // 兼容其他插件的 .ip-location；只更新或移除本脚本插入的节点。
+    let ipSpan = pubdate.querySelector(".custom-hook-ip");
+    const otherIP = pubdate.querySelector(".ip-location:not(.custom-hook-ip)");
+    if (settings.showIP && ip && !otherIP) {
+        if (!ipSpan) {
             ipSpan = document.createElement("span");
-            ipSpan.className = "ip-location";
+            ipSpan.className = "ip-location custom-hook-ip";
             ipSpan.style.marginLeft = "15px";
-            ipSpan.textContent = ip;
             pubdate.appendChild(ipSpan);
         }
-    }
+        ipSpan.textContent = ip;
+    } else ipSpan?.remove();
+
+    // 最后追加状态/属性，确保它们排在 IP 属地之后（也包括其他插件的属地）。
+    if (extra.childElementCount) pubdate.appendChild(extra);
+    else extra.remove();
 }
 
 /** 
@@ -188,6 +303,11 @@ function injectRefreshToReplies(ctx) {
     // 如果 footer 里面已经有 B 站原生的按钮就跳过
     if (footer.children.length > 0) return;
 
+    const rcount = ctx.data?.rcount ?? 0;
+    const rlist = ctx.list?.length ?? 0;
+    const zeroReplies = rlist === 0 && rcount <= 0;
+    if (zeroReplies ? !settings.showZeroReplyRefresh : !settings.enhanceRepliesToggle) return;
+
     // 辅助函数：创建 Bilibili 原生风格按钮
     const createBiliBtn = (text, onClick) => {
         const btn = document.createElement("bili-text-button");
@@ -205,9 +325,6 @@ function injectRefreshToReplies(ctx) {
         wrapper.id = id;
         return wrapper;
     };
-
-    const rcount = ctx.data?.rcount ?? 0;
-    const rlist = ctx.list?.length ?? 0;
 
     if (rlist > 0) {
         const wrapper = createWrapper("pagination");
@@ -254,36 +371,47 @@ const targets = [
     "bili-comment-renderer", // 主楼容器
     "bili-comment-reply-renderer", // 回复容器
     "bili-comment-replies-renderer", // 回复区容器
+    "bili-comment-menu", // 原生菜单内的设置入口
 ];
-const originalDefine = customElements.define;
-customElements.define = function (name, constructor) {
-    if (targets.includes(name)) {
-        // 获取 Lit 组件的原型
-        const proto = constructor.prototype;
+const hookedPrototypes = new WeakSet();
 
-        // 拦截 updated 生命周期方法
-        // Lit 在 DOM 更新完成后会自动调用 updated(changedProperties)
-        const originalUpdated = proto.updated;
-        proto.updated = function (changedProperties) {
-            // 先执行原有的渲染逻辑
-            if (originalUpdated) {
-                originalUpdated.call(this, changedProperties);
-            }
+function injectComponent(name, ctx) {
+    if (name === "bili-comment-menu") injectMenuSettings(ctx);
+    else if (name === "bili-comment-replies-renderer") injectRefreshToReplies(ctx);
+    else performInjection(ctx);
+}
 
-            // 执行我们的注入逻辑
-            // 放到 microtask 确保渲染彻底完成
-            if (name === "bili-comment-replies-renderer") {
-                if (settings.enhanceRepliesToggle) {
-                    Promise.resolve().then(() => injectRefreshToReplies(this));
-                }
-            } else {
-                Promise.resolve().then(() => performInjection(this));
-            }
-        };
+// 设置切换时才遍历现有 Shadow DOM；平时继续使用组件生命周期更新。
+function visitCommentComponents(callback, root = document) {
+    for (const el of root.querySelectorAll("*")) {
+        if (targets.includes(el.localName)) callback(el);
+        if (el.shadowRoot) visitCommentComponents(callback, el.shadowRoot);
     }
+}
 
-    return originalDefine.call(this, name, constructor);
+function hookComponent(name, constructor) {
+    const proto = constructor.prototype;
+    if (hookedPrototypes.has(proto)) return;
+    hookedPrototypes.add(proto);
+    const originalUpdated = proto.updated;
+    proto.updated = function (changedProperties) {
+        originalUpdated?.call(this, changedProperties);
+        Promise.resolve().then(() => injectComponent(name, this));
+    };
+}
+
+const originalDefine = customElements.define;
+customElements.define = function (name, constructor, options) {
+    if (targets.includes(name)) hookComponent(name, constructor);
+    return originalDefine.call(this, name, constructor, options);
 };
+for (const name of targets) {
+    const constructor = customElements.get(name);
+    if (constructor) hookComponent(name, constructor);
+}
+const injectExisting = () => visitCommentComponents((ctx) => injectComponent(ctx.localName, ctx));
+if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", injectExisting, { once: true });
+else injectExisting();
 
 // ===================== 专栏(opus)观看/投币数注入 =====================
 // 在 opus 动态页（转发了专栏时），把专栏的观看数/投币数写进右侧 side-toolbar。
