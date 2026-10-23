@@ -2,7 +2,7 @@
 // @name        B站评论显示状态
 // @namespace   https://github.com/ZBpine/bili-danmaku-adapt/
 // @description 评论显示状态，以便知道是否被阿瓦隆。
-// @version     1.2.1
+// @version     1.2.2
 // @author      ZBpine
 // @icon        https://www.bilibili.com/favicon.ico
 // @match       https://www.bilibili.com/*
@@ -159,8 +159,12 @@ const ATTR_MAP = {
     17: "仅自己可见",
     21: "仅自己可见",
     22: "仅自己可见",
+    23: "笔记",
     25: "妙评",
+    26: "笔记",
     27: "带图",
+    31: "参与投票",
+    32: "充电评论",
     36: "恶意评论",
 };
 
